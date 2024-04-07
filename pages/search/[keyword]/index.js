@@ -1,28 +1,15 @@
-import { getGlobalNotionData } from '@/lib/notion/getNotionData'
-import { useGlobal } from '@/lib/global'
-import { getDataFromCache } from '@/lib/cache/cache_manager'
-import * as ThemeMap from '@/themes'
 import BLOG from '@/blog.config'
+import { getDataFromCache } from '@/lib/cache/cache_manager'
+import { siteConfig } from '@/lib/config'
+import { getGlobalData } from '@/lib/db/getSiteData'
+import { getLayoutByTheme } from '@/themes/theme'
+import { useRouter } from 'next/router'
 
 const Index = props => {
-  const { keyword, siteInfo } = props
-  const { locale } = useGlobal()
-  const meta = {
-    title: `${keyword || ''}${keyword ? ' | ' : ''}${locale.NAV.SEARCH} | ${siteInfo?.title}`,
-    description: siteInfo?.title,
-    image: siteInfo?.pageCover,
-    slug: 'search/' + (keyword || ''),
-    type: 'website'
-  }
-  const { theme } = useGlobal()
-  const ThemeComponents = ThemeMap[theme]
-  return (
-    <ThemeComponents.LayoutSearch
-      {...props}
-      meta={meta}
-      currentSearch={keyword}
-    />
-  )
+  // 根据页面路径加载不同Layout文件
+  const Layout = getLayoutByTheme({ theme: siteConfig('THEME'), router: useRouter() })
+
+  return <Layout {...props} />
 }
 
 /**
@@ -31,19 +18,19 @@ const Index = props => {
  * @returns
  */
 export async function getStaticProps({ params: { keyword } }) {
-  const props = await getGlobalNotionData({
+  const props = await getGlobalData({
     from: 'search-props',
     pageType: ['Post']
   })
   const { allPages } = props
-  const allPosts = allPages.filter(page => page.type === 'Post' && page.status === 'Published')
+  const allPosts = allPages?.filter(page => page.type === 'Post' && page.status === 'Published')
   props.posts = await filterByMemCache(allPosts, keyword)
   props.postCount = props.posts.length
   // 处理分页
-  if (BLOG.POST_LIST_STYLE === 'scroll') {
+  if (siteConfig('POST_LIST_STYLE') === 'scroll') {
     // 滚动列表 给前端返回所有数据
-  } else if (BLOG.POST_LIST_STYLE === 'page') {
-    props.posts = props.posts?.slice(0, BLOG.POSTS_PER_PAGE)
+  } else if (siteConfig('POST_LIST_STYLE') === 'page') {
+    props.posts = props.posts?.slice(0, siteConfig('POSTS_PER_PAGE'))
   }
   props.keyword = keyword
   return {
@@ -100,8 +87,7 @@ function getTextContent(textArray) {
  * @param {*} obj
  * @returns
  */
-const isIterable = obj =>
-  obj != null && typeof obj[Symbol.iterator] === 'function'
+const isIterable = obj => obj != null && typeof obj[Symbol.iterator] === 'function'
 
 /**
  * 在内存缓存中进行全文索引
@@ -112,25 +98,16 @@ const isIterable = obj =>
 async function filterByMemCache(allPosts, keyword) {
   const filterPosts = []
   if (keyword) {
-    keyword = keyword.trim()
+    keyword = keyword.trim().toLowerCase()
   }
   for (const post of allPosts) {
     const cacheKey = 'page_block_' + post.id
     const page = await getDataFromCache(cacheKey, true)
-    const tagContent = post.tags && Array.isArray(post.tags) ? post.tags.join(' ') : ''
+    const tagContent = post?.tags && Array.isArray(post?.tags) ? post?.tags.join(' ') : ''
     const categoryContent = post.category && Array.isArray(post.category) ? post.category.join(' ') : ''
     const articleInfo = post.title + post.summary + tagContent + categoryContent
     let hit = articleInfo.toLowerCase().indexOf(keyword) > -1
-    let indexContent = [post.summary]
-    // 防止搜到加密文章的内容
-    if (page && page.block && !post.password) {
-      const contentIds = Object.keys(page.block)
-      contentIds.forEach(id => {
-        const properties = page?.block[id]?.value?.properties
-        indexContent = appendText(indexContent, properties, 'title')
-        indexContent = appendText(indexContent, properties, 'caption')
-      })
-    }
+    const indexContent = getPageContentText(post, page)
     // console.log('全文搜索缓存', cacheKey, page != null)
     post.results = []
     let hitCount = 0
@@ -139,7 +116,7 @@ async function filterByMemCache(allPosts, keyword) {
       if (!c) {
         continue
       }
-      const index = c.toLowerCase().indexOf(keyword.toLowerCase())
+      const index = c.toLowerCase().indexOf(keyword)
       if (index > -1) {
         hit = true
         hitCount += 1
@@ -155,6 +132,20 @@ async function filterByMemCache(allPosts, keyword) {
     }
   }
   return filterPosts
+}
+
+export function getPageContentText(post, pageBlockMap) {
+  let indexContent = []
+  // 防止搜到加密文章的内容
+  if (pageBlockMap && pageBlockMap.block && !post.password) {
+    const contentIds = Object.keys(pageBlockMap.block)
+    contentIds.forEach(id => {
+      const properties = pageBlockMap?.block[id]?.value?.properties
+      indexContent = appendText(indexContent, properties, 'title')
+      indexContent = appendText(indexContent, properties, 'caption')
+    })
+  }
+  return indexContent.join('')
 }
 
 export default Index

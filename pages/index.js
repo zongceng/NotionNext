@@ -1,10 +1,10 @@
 import BLOG from '@/blog.config'
-import { getPostBlocks } from '@/lib/notion'
-import { getGlobalNotionData } from '@/lib/notion/getNotionData'
-import * as ThemeMap from '@/themes'
-import { useGlobal } from '@/lib/global'
-import { generateRss } from '@/lib/rss'
+import { siteConfig } from '@/lib/config'
+import { getGlobalData, getPostBlocks } from '@/lib/db/getSiteData'
 import { generateRobotsTxt } from '@/lib/robots.txt'
+import { generateRss } from '@/lib/rss'
+import { getLayoutByTheme } from '@/themes/theme'
+import { useRouter } from 'next/router'
 
 /**
  * 首页布局
@@ -12,9 +12,12 @@ import { generateRobotsTxt } from '@/lib/robots.txt'
  * @returns
  */
 const Index = props => {
-  const { theme } = useGlobal()
-  const ThemeComponents = ThemeMap[theme]
-  return <ThemeComponents.LayoutIndex {...props} />
+  // 根据页面路径加载不同Layout文件
+  const Layout = getLayoutByTheme({
+    theme: siteConfig('THEME'),
+    router: useRouter()
+  })
+  return <Layout {...props} />
 }
 
 /**
@@ -23,33 +26,31 @@ const Index = props => {
  */
 export async function getStaticProps() {
   const from = 'index'
-  const props = await getGlobalNotionData({ from })
+  const props = await getGlobalData({ from })
 
-  const { siteInfo } = props
-  props.posts = props.allPages.filter(page => page.type === 'Post' && page.status === 'Published')
+  props.posts = props.allPages?.filter(
+    page => page.type === 'Post' && page.status === 'Published'
+  )
 
-  const meta = {
-    title: `${siteInfo?.title} | ${siteInfo?.description}`,
-    description: siteInfo?.description,
-    image: siteInfo?.pageCover,
-    slug: '',
-    type: 'website'
-  }
   // 处理分页
-  if (BLOG.POST_LIST_STYLE === 'scroll') {
+  if (siteConfig('POST_LIST_STYLE') === 'scroll') {
     // 滚动列表默认给前端返回所有数据
-  } else if (BLOG.POST_LIST_STYLE === 'page') {
-    props.posts = props.posts?.slice(0, BLOG.POSTS_PER_PAGE)
+  } else if (siteConfig('POST_LIST_STYLE') === 'page') {
+    props.posts = props.posts?.slice(0, siteConfig('POSTS_PER_PAGE'))
   }
 
   // 预览文章内容
-  if (BLOG.POST_LIST_PREVIEW === 'true') {
+  if (siteConfig('POST_LIST_PREVIEW')) {
     for (const i in props.posts) {
       const post = props.posts[i]
       if (post.password && post.password !== '') {
         continue
       }
-      post.blockMap = await getPostBlocks(post.id, 'slug', BLOG.POST_PREVIEW_LINES)
+      post.blockMap = await getPostBlocks(
+        post.id,
+        'slug',
+        siteConfig('POST_PREVIEW_LINES')
+      )
     }
   }
 
@@ -60,13 +61,12 @@ export async function getStaticProps() {
     generateRss(props?.latestPosts || [])
   }
 
+  // 生成全文索引 - 仅在 yarn build 时执行 && process.env.npm_lifecycle_event === 'build'
+
   delete props.allPages
 
   return {
-    props: {
-      meta,
-      ...props
-    },
+    props,
     revalidate: parseInt(BLOG.NEXT_REVALIDATE_SECOND)
   }
 }
